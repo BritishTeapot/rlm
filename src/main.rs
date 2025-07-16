@@ -114,19 +114,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let mut input = String::new();
     let stdin = io::stdin();
 
     let api_key = get_api_key();
 
-    loop {
-        let mut line = String::new();
-        let bytes_read = stdin.read_line(&mut line)?;
-        if bytes_read == 0 {
-            break;
-        }
-        input.push_str(&line);
-    }
+    let input = io::read_to_string(stdin).expect("Failed to read input from stdin");
 
     let is_system_message_present = args.system != None;
     let mut system_message: String = String::new();
@@ -158,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if is_system_message_present {
         if args.raw_request {
-            eprintln!("System message: {}\n", system_message);
+            eprintln!("System message: {}", system_message);
         }
         request_body.messages.push(Message {
             role: "system".to_string(),
@@ -167,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.raw_request {
-        eprintln!("User message: {}\n", user_message);
+        eprintln!("User message: {}", user_message);
     }
     request_body.messages.push(Message {
         role: "user".to_string(),
