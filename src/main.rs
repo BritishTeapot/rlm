@@ -25,7 +25,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-include!("api_key.rs");
+use std::{fs::read_to_string, path::Path};
 
 #[derive(serde::Serialize)]
 struct OpenRouterRequest {
@@ -94,6 +94,17 @@ fn get_system_message(system_message: &str) -> String {
     system_message.to_string()
 }
 
+fn get_api_key() -> std::string::String {
+    let home = env::var("HOME").expect("Environment variable 'HOME' must be set");
+    let path = Path::new(&home)
+        .join(".config")
+        .join("rapidllm")
+        .join("openrouter")
+        .join("api_key");
+
+    read_to_string(path).expect("No OpenRouter API key at ~/.config/rapidllm/openrouter/api_key")
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -105,6 +116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut input = String::new();
     let stdin = io::stdin();
+
+    let api_key = get_api_key();
 
     loop {
         let mut line = String::new();
@@ -164,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let response = client
         .post("https://openrouter.ai/api/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", API_KEY))
+        .header("Authorization", format!("Bearer {}", api_key))
         .json(&request_body)
         .send()
         .await?;
