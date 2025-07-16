@@ -1,6 +1,6 @@
 # rlm
 
-A simple shell command that recieves text in `stdin` and outputs the response in `stdout`. Supports system messages and prompts. Now only supports OpenRouter, due to it's popularity and versatility.
+A simple shell command that receives text in `stdin`, sends it to an LLM, and outputs the response in `stdout`. Supports system messages and prompts. Now only supports OpenRouter, due to it's popularity and versatility.
 
 `rlm` is build to be versatile and simple. It only does the bare minimum of what is required to interface with LLMs. You can use it to build more complicated scripts and systems with ease.
 
