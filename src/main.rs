@@ -53,7 +53,7 @@ struct Choice {
 #[command(about = "rapidllm core command.", version)]
 struct Args {
     /// AI model to use
-    #[arg(short = 'm', long = "model", default_value = "mistralai/ministral-3b")]
+    #[arg(short = 'm', long = "model", default_value = "thudm/glm-4-32b:free")]
     model: String,
 
     #[arg(short = 'c', long = "character_limit", default_value = "16384")]
