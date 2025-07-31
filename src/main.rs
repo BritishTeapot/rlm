@@ -68,6 +68,9 @@ struct Args {
 
     #[arg(long)]
     raw_request: bool,
+
+    #[arg(long)]
+    verbose: bool,
 }
 
 fn get_system_message(system_message: &str) -> String {
