@@ -72,7 +72,9 @@ struct Args {
 
 fn get_system_message(system_message: &str) -> String {
     // Condition 1: Check custom prompt file in XDG config directory
-    if let Ok(home) = env::var("HOME") {
+    let home = env::var("HOME")
+        .expect("Could not retrieve system_message: HOME enviroment variable not set.");
+    if !system_message.contains('/') {
         let mut path_buf = PathBuf::from(home);
         path_buf.push(".config");
         path_buf.push("rapidllm");
@@ -95,14 +97,22 @@ fn get_system_message(system_message: &str) -> String {
 }
 
 fn get_api_key() -> std::string::String {
-    let home = env::var("HOME").expect("Environment variable 'HOME' must be set");
+    let home =
+        env::var("HOME").expect("Could not retrieve API key: HOME enviroment variable not set.");
     let path = Path::new(&home)
         .join(".config")
         .join("rapidllm")
         .join("openrouter")
         .join("api_key");
 
-    read_to_string(path).expect("No OpenRouter API key at ~/.config/rapidllm/openrouter/api_key")
+    // more verbose messages (e.g. "No such file or directory.")
+    read_to_string(path).unwrap_or_else(|err| {
+        eprintln!(
+            "Could not read OpenRouter API key at ~/.config/rapidllm/openrouter/api_key: {}",
+            err
+        );
+        std::process::exit(1);
+    })
 }
 
 #[tokio::main]
@@ -114,22 +124,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if args.verbose {
+        eprintln!("rlm started");
+    }
+
     let stdin = io::stdin();
 
     let api_key = get_api_key();
 
+    if args.verbose {
+        eprintln!("Read OpenRouter API key.");
+    }
+
+    // retrieve user message
     let input = io::read_to_string(stdin).expect("Failed to read input from stdin");
 
+    let user_message = input.trim().to_string();
+    if args.verbose {
+        eprintln!("Read input of size {}", user_message.len());
+    }
+
+    // retrieve system message
     let is_system_message_present = args.system != None;
     let mut system_message: String = String::new();
     if is_system_message_present {
         system_message = get_system_message(args.system.unwrap().trim());
+        if args.verbose {
+            eprintln!(
+                "Read system message:\n\n```\n{}\n```\n\n...of size {}",
+                system_message,
+                system_message.len()
+            );
+        }
     }
 
-    let user_message = input.trim().to_string();
-
+    // handle input size errors
     if user_message.len() + system_message.len() == 0 {
-        println!("Input is empty");
+        println!("Input and system message are empty");
         std::process::exit(1);
     }
 
