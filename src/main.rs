@@ -208,8 +208,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .send()
         .await?;
 
+    // Check if the response status is successful
+    if !response.status().is_success() {
+        let status = response.status();
+        let response_text = response.text().await?;
+        eprintln!("API request failed with status: {}", status);
+        eprintln!("Response body: {}", response_text);
+        std::process::exit(1);
+    }
+
     let response_text = response.text().await?;
-    let response_json: OpenRouterResponse = serde_json::from_str(&response_text)?;
+    let response_json: OpenRouterResponse = match serde_json::from_str(&response_text) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Failed to parse JSON response: {}", e);
+            eprintln!("Response body was: {}", response_text);
+            std::process::exit(1);
+        }
+    };
+
     if let Some(first_choice) = response_json.choices.first() {
         print!("{}", first_choice.message.content);
     } else {
