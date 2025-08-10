@@ -19,11 +19,13 @@ General Public License along with this program. If not,
 see <https://www.gnu.org/licenses/>.
 */
 
+use anyhow::{Context, Result};
 use clap::Parser;
 use reqwest;
 use std::env;
 use std::fs;
 use std::io;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::{fs::read_to_string, path::Path};
 
@@ -73,11 +75,19 @@ struct Args {
     verbose: bool,
 }
 
-fn get_system_message(system_message: &str) -> String {
+fn get_system_message(system_message: &str) -> Result<String> {
     // Condition 1: Check custom prompt file in XDG config directory
-    let home = env::var("HOME")
-        .expect("Could not retrieve system_message: HOME enviroment variable not set.");
     if !system_message.contains('/') {
+        // if the string does not contain '/', then it cannot escape outside the promopts directory
+        // (e.g. you cannot read ../../etc/passwd through system_message). This should be enough
+        // since:
+        // 1. '/' is one of the only characters no filaname on Linux can use.
+        // 2. We are not targeting windows systems :) No need to worry about backslashes
+
+        // If HOME isn't set, we should fail. We don't want situations where we interpret --system
+        // parameter in a way that user did not intend.
+        let home = env::var("HOME").context("HOME enviroment variable not set.")?;
+
         let mut path_buf = PathBuf::from(home);
         path_buf.push(".config");
         path_buf.push("rapidllm");
@@ -85,23 +95,47 @@ fn get_system_message(system_message: &str) -> String {
         path_buf.push(system_message);
         path_buf.push("system.md");
 
-        if let Ok(content) = fs::read_to_string(&path_buf) {
-            return content;
+        match std::fs::read_to_string(&path_buf) {
+            Ok(content) => return Ok(content),
+
+            Err(e) => {
+                if e.kind() != ErrorKind::NotFound {
+                    // if the function failed for any other reason than ENOENT, we should inform
+                    // the user by erroring out
+                    return Err(e).context(format!(
+                        "Could not open file {}",
+                        path_buf.display().to_string()
+                    ));
+                }
+            }
+        }
+
+        // if the path was invalid (and no other error occured), the system_message might still refer to either a file in pwd or the
+        // system message itself
+    }
+
+    // if the system_message does have '/', then it is either:
+    // 1. A filepath.
+    // 2. A system message that itself contains '/'.
+
+    // Condition 2: Check if input is a valid file path
+    match fs::read_to_string(system_message) {
+        Ok(content) => return Ok(content),
+
+        Err(e) => {
+            if e.kind() != ErrorKind::NotFound {
+                return Err(e).context("Could not open file");
+            }
         }
     }
 
-    // Condition 2: Check if input is a valid file path
-    if let Ok(content) = fs::read_to_string(system_message) {
-        return content;
-    }
-
     // Condition 3: Return original string
-    system_message.to_string()
+    Ok(system_message.to_string())
 }
 
-fn get_api_key() -> std::string::String {
-    let home =
-        env::var("HOME").expect("Could not retrieve API key: HOME enviroment variable not set.");
+fn get_api_key() -> Result<std::string::String> {
+    let home = env::var("HOME").context("HOME enviroment variable not set.")?;
+
     let path = Path::new(&home)
         .join(".config")
         .join("rapidllm")
@@ -109,17 +143,22 @@ fn get_api_key() -> std::string::String {
         .join("api_key");
 
     // more verbose messages (e.g. "No such file or directory.")
-    read_to_string(path).unwrap_or_else(|err| {
-        eprintln!(
-            "Could not read OpenRouter API key at ~/.config/rapidllm/openrouter/api_key: {}",
-            err
-        );
-        std::process::exit(1);
-    })
+    read_to_string(path).context("Could not read ~/.config/rapidllm/openrouter/api_key")
+}
+
+fn get_user_message() -> Result<String> {
+    let stdin = io::stdin();
+    // retrieve user message, explicit failure if input is non-UTF8
+    let input = match io::read_to_string(stdin) {
+        Ok(read) => read,
+        Err(e) => return Err(e).context("Could not read from stdin"),
+    };
+
+    Ok(input.trim().to_string())
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.license {
@@ -131,50 +170,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("rlm started");
     }
 
-    let stdin = io::stdin();
-
-    let api_key = get_api_key();
-
+    let api_key = get_api_key().context("Could not retrieve OpenRouter API key")?;
     if args.verbose {
         eprintln!("Read OpenRouter API key.");
-    }
-
-    // retrieve user message
-    let input = io::read_to_string(stdin).expect("Failed to read input from stdin");
-
-    let user_message = input.trim().to_string();
-    if args.verbose {
-        eprintln!("Read input of size {}", user_message.len());
-    }
-
-    // retrieve system message
-    let is_system_message_present = args.system != None;
-    let mut system_message: String = String::new();
-    if is_system_message_present {
-        system_message = get_system_message(args.system.unwrap().trim());
-        if args.verbose {
-            eprintln!(
-                "Read system message:\n\n```\n{}\n```\n\n...of size {}",
-                system_message,
-                system_message.len()
-            );
-        }
-    }
-
-    // handle input size errors
-    if user_message.len() + system_message.len() == 0 {
-        println!("Input and system message are empty");
-        std::process::exit(1);
-    }
-
-    if user_message.len() + system_message.len() > args.character_limit {
-        eprintln!(
-            "Input too long: {} characters given, but the limit is {}",
-            user_message.len() + system_message.len(),
-            args.character_limit
-        );
-
-        std::process::exit(1);
     }
 
     let mut request_body = OpenRouterRequest {
@@ -182,10 +180,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         messages: Vec::<Message>::new(),
     };
 
-    if is_system_message_present {
-        if args.raw_request {
-            eprintln!("System message: {}", system_message);
+    let user_message = get_user_message().context("Could not get user message")?;
+
+    if args.verbose {
+        eprintln!(
+            "Read user message:\n\n```\n{}\n```\n\n...of size {}",
+            &user_message,
+            user_message.len()
+        );
+    }
+    request_body.messages.push(Message {
+        role: "user".to_string(),
+        content: user_message,
+    });
+
+    // retrieve system message
+    if let Some(system_message_arg) = args.system {
+        let system_message = get_system_message(system_message_arg.trim())
+            .context("Could not get system message")?;
+        if args.verbose {
+            eprintln!(
+                "Read system message:\n\n```\n{}\n```\n\n...of size {}",
+                &system_message,
+                system_message.len()
+            );
         }
+
+        // push message into the message list
         request_body.messages.push(Message {
             role: "system".to_string(),
             content: system_message,
@@ -193,46 +214,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if args.raw_request {
-        eprintln!("User message: {}", user_message);
+        let mut size = 0;
+        for message in &request_body.messages {
+            eprintln!("{}:{}", message.role, message.content);
+            size += message.content.len();
+        }
+        if size == 0 {
+            return Err(anyhow::anyhow!("Input is empty"));
+        }
+        if size > args.character_limit {
+            return Err(anyhow::anyhow!(format!(
+                "Input too long: {} characters given, but the limit is {}",
+                size, args.character_limit
+            )));
+        }
     }
-    request_body.messages.push(Message {
-        role: "user".to_string(),
-        content: user_message,
-    });
 
     let client = reqwest::Client::new();
     let response = client
         .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key))
         .json(&request_body)
         .send()
-        .await?;
+        .await
+        .context("Failed to send API request")?;
 
     // Check if the response status is successful
     if !response.status().is_success() {
         let status = response.status();
         let response_text = response.text().await?;
-        eprintln!("API request failed with status: {}", status);
-        eprintln!("Response body: {}", response_text);
-        std::process::exit(1);
+        return Err(anyhow::anyhow!(format!(
+            "API responeded with status {}; Response body was: {}",
+            status, response_text
+        )));
     }
 
     let response_text = response.text().await?;
     let response_json: OpenRouterResponse = match serde_json::from_str(&response_text) {
         Ok(json) => json,
         Err(e) => {
-            eprintln!("Failed to parse JSON response: {}", e);
-            eprintln!("Response body was: {}", response_text);
-            std::process::exit(1);
+            return Err(e).context(format!(
+                "Failed to parse JSON of the API request response; Response body was: {}",
+                response_text
+            ));
         }
     };
 
-    if let Some(first_choice) = response_json.choices.first() {
-        print!("{}", first_choice.message.content);
-    } else {
-        eprintln!("No response from LLM API");
-        std::process::exit(1);
-    }
+    let first_choice = response_json
+        .choices
+        .first()
+        .context("No response from LLM API")?;
 
+    print!("{}", first_choice.message.content);
     Ok(())
 }
